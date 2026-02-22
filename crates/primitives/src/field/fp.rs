@@ -178,6 +178,45 @@ impl Fp {
     }
 }
 
+// Step 2-5: square, pow, inv
+//
+// mont_mul 하나로 세 가지를 만든다:
+//   square: a * a (자기 자신과 곱셈)
+//   pow: square-and-multiply로 거듭제곱
+//   inv: Fermat의 소정리 — a^{p-2} mod p = a^{-1}
+
+impl Fp {
+    /// a^2 = mont_mul(a, a)
+    pub fn square(&self) -> Fp {
+        self.mont_mul(self)
+    }
+
+    /// a^exp — 오른쪽에서 왼쪽으로 비트를 보며 square-and-multiply
+    pub fn pow(&self, exp: &[u64; 4]) -> Fp {
+        let mut result = Fp::ONE;
+        let mut base = *self;
+
+        for &limb in exp.iter() {
+            for j in 0..64 {
+                if (limb >> j) & 1 == 1 {
+                    result = result.mont_mul(&base);
+                }
+                base = base.square();
+            }
+        }
+        result
+    }
+
+    /// a^{-1} mod p = a^{p-2} mod p (Fermat's little theorem)
+    /// p가 소수이므로 a^{p-1} ≡ 1, 양변을 a로 나누면 a^{p-2} ≡ a^{-1}
+    pub fn inv(&self) -> Option<Fp> {
+        if self.is_zero() {
+            return None; // 0에는 역원이 없다
+        }
+        Some(self.pow(&[MODULUS[0] - 2, MODULUS[1], MODULUS[2], MODULUS[3]]))
+    }
+}
+
 // Step 2-2: 큰 수 산술의 빌딩 블록
 //
 // 문제: u64 + u64가 64-bit를 넘으면?
@@ -383,6 +422,52 @@ mod tests {
         // a * 1 = a
         let a = Fp::from_u64(123);
         assert_eq!(a.mont_mul(&Fp::ONE), a);
+    }
+
+    // Step 2-5 테스트
+
+    #[test]
+    fn square_small() {
+        let a = Fp::from_u64(9);
+        assert_eq!(a.square(), Fp::from_u64(81));
+    }
+
+    #[test]
+    fn square_equals_mul_self() {
+        let a = Fp::from_u64(123);
+        assert_eq!(a.square(), a.mont_mul(&a));
+    }
+
+    #[test]
+    fn pow_small() {
+        // 3^10 = 59049
+        let result = Fp::from_u64(3).pow(&[10, 0, 0, 0]);
+        assert_eq!(result, Fp::from_u64(59049));
+    }
+
+    #[test]
+    fn inv_of_seven() {
+        let a = Fp::from_u64(7);
+        let a_inv = a.inv().expect("7의 역원 존재");
+        // a * a^{-1} = 1
+        assert_eq!(a.mont_mul(&a_inv), Fp::ONE);
+    }
+
+    #[test]
+    fn inv_of_one() {
+        assert_eq!(Fp::ONE.inv().unwrap(), Fp::ONE);
+    }
+
+    #[test]
+    fn inv_of_zero_is_none() {
+        assert!(Fp::ZERO.inv().is_none());
+    }
+
+    #[test]
+    fn p_minus_one_squared_is_one() {
+        // p-1 ≡ -1 (mod p), (-1)^2 = 1
+        let p_minus_1 = Fp::from_raw([MODULUS[0] - 1, MODULUS[1], MODULUS[2], MODULUS[3]]);
+        assert_eq!(p_minus_1.square(), Fp::ONE);
     }
 
     // Step 2-3 테스트
