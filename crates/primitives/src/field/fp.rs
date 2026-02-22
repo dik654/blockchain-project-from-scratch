@@ -55,6 +55,75 @@ fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
     (wide as u64, (wide >> 64) as u64)
 }
 
+// Step 2-3: 모듈러 덧셈/뺄셈
+//
+// 유한체에서는 모든 연산 결과가 [0, p) 범위 안에 있어야 한다
+// 덧셈: 그냥 더하고, 결과 >= p이면 p를 뺀다
+// 뺄셈: 그냥 빼고, underflow면 p를 더한다
+// 부정: 0이면 0, 아니면 p - a
+
+impl Fp {
+    /// (a + b) mod p
+    pub fn add(&self, rhs: &Fp) -> Fp {
+        // 4개 limb을 순서대로 더하며 carry 전파
+        let (d0, carry) = self.0[0].overflowing_add(rhs.0[0]);
+        let (d1, carry) = adc(self.0[1], rhs.0[1], carry);
+        let (d2, carry) = adc(self.0[2], rhs.0[2], carry);
+        let (d3, _) = adc(self.0[3], rhs.0[3], carry);
+
+        // 결과가 p 이상이면 p를 빼서 [0, p) 범위로
+        sub_if_gte([d0, d1, d2, d3])
+    }
+
+    /// (a - b) mod p
+    pub fn sub(&self, rhs: &Fp) -> Fp {
+        let (d0, borrow) = self.0[0].overflowing_sub(rhs.0[0]);
+        let (d1, borrow) = sbb(self.0[1], rhs.0[1], borrow);
+        let (d2, borrow) = sbb(self.0[2], rhs.0[2], borrow);
+        let (d3, borrow) = sbb(self.0[3], rhs.0[3], borrow);
+
+        if borrow {
+            // a < b → 결과가 음수 → p를 더하면 동일한 값 (mod p)
+            let (d0, carry) = d0.overflowing_add(MODULUS[0]);
+            let (d1, carry) = adc(d1, MODULUS[1], carry);
+            let (d2, carry) = adc(d2, MODULUS[2], carry);
+            let (d3, _) = adc(d3, MODULUS[3], carry);
+            Fp([d0, d1, d2, d3])
+        } else {
+            Fp([d0, d1, d2, d3])
+        }
+    }
+
+    /// -a mod p
+    pub fn neg(&self) -> Fp {
+        if self.is_zero() {
+            *self
+        } else {
+            // p - a
+            let (d0, borrow) = MODULUS[0].overflowing_sub(self.0[0]);
+            let (d1, borrow) = sbb(MODULUS[1], self.0[1], borrow);
+            let (d2, borrow) = sbb(MODULUS[2], self.0[2], borrow);
+            let (d3, _) = sbb(MODULUS[3], self.0[3], borrow);
+            Fp([d0, d1, d2, d3])
+        }
+    }
+}
+
+/// 결과 >= p이면 p를 빼서 정규화
+fn sub_if_gte(v: [u64; 4]) -> Fp {
+    // 일단 p를 빼본다
+    let (d0, borrow) = v[0].overflowing_sub(MODULUS[0]);
+    let (d1, borrow) = sbb(v[1], MODULUS[1], borrow);
+    let (d2, borrow) = sbb(v[2], MODULUS[2], borrow);
+    let (d3, borrow) = sbb(v[3], MODULUS[3], borrow);
+
+    if borrow {
+        Fp(v) // v < p → 원래 값 유지
+    } else {
+        Fp([d0, d1, d2, d3]) // v >= p → 뺀 값 사용
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +192,49 @@ mod tests {
         let (lo, hi) = mac(0, u64::MAX, u64::MAX, 0);
         assert_eq!(lo, 1);
         assert_eq!(hi, u64::MAX - 1);
+    }
+
+    // Step 2-3 테스트
+
+    #[test]
+    fn add_small() {
+        let a = Fp([7, 0, 0, 0]);
+        let b = Fp([11, 0, 0, 0]);
+        assert_eq!(a.add(&b), Fp([18, 0, 0, 0]));
+    }
+
+    #[test]
+    fn add_wraps_mod_p() {
+        // (p-1) + 1 = 0 mod p
+        let p_minus_1 = Fp([MODULUS[0] - 1, MODULUS[1], MODULUS[2], MODULUS[3]]);
+        let one = Fp([1, 0, 0, 0]);
+        assert_eq!(p_minus_1.add(&one), Fp::ZERO);
+    }
+
+    #[test]
+    fn sub_small() {
+        let a = Fp([20, 0, 0, 0]);
+        let b = Fp([7, 0, 0, 0]);
+        assert_eq!(a.sub(&b), Fp([13, 0, 0, 0]));
+    }
+
+    #[test]
+    fn sub_underflow_wraps() {
+        // 3 - 7 → underflow → 결과 + 7 하면 다시 3
+        let a = Fp([3, 0, 0, 0]);
+        let b = Fp([7, 0, 0, 0]);
+        let c = a.sub(&b);
+        assert_eq!(c.add(&Fp([7, 0, 0, 0])), Fp([3, 0, 0, 0]));
+    }
+
+    #[test]
+    fn neg_plus_self_is_zero() {
+        let a = Fp([42, 0, 0, 0]);
+        assert_eq!(a.add(&a.neg()), Fp::ZERO);
+    }
+
+    #[test]
+    fn neg_zero_is_zero() {
+        assert_eq!(Fp::ZERO.neg(), Fp::ZERO);
     }
 }
