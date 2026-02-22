@@ -13,15 +13,168 @@ const MODULUS: [u64; 4] = [
     0x30644e72e131a029, // 최상위 64-bit
 ];
 
-/// BN254 base field element
+/// BN254 base field element — 내부는 Montgomery form
+/// 저장값: a_mont = a * R mod p
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Fp(pub(crate) [u64; 4]);
 
 impl Fp {
     pub const ZERO: Fp = Fp([0, 0, 0, 0]);
 
+    /// 1의 Montgomery form = R mod p
+    pub const ONE: Fp = Fp(R);
+
     pub fn is_zero(&self) -> bool {
         self.0 == [0, 0, 0, 0]
+    }
+}
+
+// Step 2-4: Montgomery 곱셈
+//
+// 문제: (a * b) mod p를 하려면 나눗셈이 필요하다 → 느리다
+// 해결: 수를 "Montgomery form"으로 저장하면 나눗셈 없이 곱셈 가능
+//
+// Montgomery form: a를 저장할 때 a 대신 (a * R mod p)를 저장
+//   R = 2^256 (limb 수 × 64)
+//
+// 곱셈: a_mont * b_mont를 곱하면 a*b*R^2가 되는데,
+//   REDC로 R을 하나 제거하면 a*b*R = (a*b)_mont ← 우리가 원하는 것!
+//
+// REDC의 핵심: R = 2^256이므로 "R로 나누기" = "256-bit 오른쪽 시프트"
+//   단, mod p를 유지하기 위해 INV 상수를 이용
+
+/// R = 2^256 mod p
+/// Montgomery form에서 1의 표현: 1_mont = 1 * R mod p = R
+const R: [u64; 4] = [
+    0xd35d438dc58f0d9d,
+    0x0a78eb28f5c70b3d,
+    0x666ea36f7879462c,
+    0x0e0a77c19a07df2f,
+];
+
+/// R^2 mod p — normal → Montgomery 변환에 사용
+/// from_raw(a) = mont_mul(a, R^2) = a * R^2 * R^{-1} = a * R = a_mont
+const R2: [u64; 4] = [
+    0xf32cfc5b538afa89,
+    0xb5e71911d44501fb,
+    0x47ab1eff0a417ff6,
+    0x06d89f71cab8351f,
+];
+
+/// INV = -p^{-1} mod 2^64 — REDC에서 "하위 limb을 0으로 만드는" 마법 상수
+/// Newton's method로 컴파일 타임에 계산
+const INV: u64 = {
+    let p0 = MODULUS[0];
+    let mut inv = 1u64;
+    // 각 반복마다 정밀도 2배: 1→2→4→8→16→32→64 bit
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv = inv.wrapping_mul(2u64.wrapping_sub(p0.wrapping_mul(inv)));
+    inv.wrapping_neg()
+};
+
+impl Fp {
+    /// normal → Montgomery: a → a * R mod p
+    pub fn from_raw(v: [u64; 4]) -> Self {
+        // mont_mul(a, R^2) = a * R^2 * R^{-1} = a * R
+        Fp(v).mont_mul(&Fp(R2))
+    }
+
+    /// u64 → Fp
+    pub fn from_u64(v: u64) -> Self {
+        Fp::from_raw([v, 0, 0, 0])
+    }
+
+    /// Montgomery → normal: a_mont → a_mont * R^{-1} mod p
+    pub fn to_repr(&self) -> [u64; 4] {
+        // REDC(a_mont) = a_mont * R^{-1} = a
+        let mut t = [0u64; 8];
+        t[0] = self.0[0];
+        t[1] = self.0[1];
+        t[2] = self.0[2];
+        t[3] = self.0[3];
+        Self::mont_reduce_inner(&t)
+    }
+
+    /// Montgomery 곱셈: a_mont * b_mont * R^{-1} mod p
+    pub fn mont_mul(&self, rhs: &Fp) -> Fp {
+        // 1단계: schoolbook 4×4 곱셈 → 8-limb 결과
+        let mut t = [0u64; 8];
+
+        // self[0] × rhs 전체
+        let (t0, carry) = mac(0, self.0[0], rhs.0[0], 0);
+        let (t1, carry) = mac(0, self.0[0], rhs.0[1], carry);
+        let (t2, carry) = mac(0, self.0[0], rhs.0[2], carry);
+        let (t3, t4) = mac(0, self.0[0], rhs.0[3], carry);
+        t[0] = t0;
+
+        // self[1] × rhs, 기존 값에 누적
+        let (t1, carry) = mac(t1, self.0[1], rhs.0[0], 0);
+        let (t2, carry) = mac(t2, self.0[1], rhs.0[1], carry);
+        let (t3, carry) = mac(t3, self.0[1], rhs.0[2], carry);
+        let (t4, t5) = mac(t4, self.0[1], rhs.0[3], carry);
+        t[1] = t1;
+
+        // self[2] × rhs
+        let (t2, carry) = mac(t2, self.0[2], rhs.0[0], 0);
+        let (t3, carry) = mac(t3, self.0[2], rhs.0[1], carry);
+        let (t4, carry) = mac(t4, self.0[2], rhs.0[2], carry);
+        let (t5, t6) = mac(t5, self.0[2], rhs.0[3], carry);
+        t[2] = t2;
+
+        // self[3] × rhs
+        let (t3, carry) = mac(t3, self.0[3], rhs.0[0], 0);
+        let (t4, carry) = mac(t4, self.0[3], rhs.0[1], carry);
+        let (t5, carry) = mac(t5, self.0[3], rhs.0[2], carry);
+        let (t6, t7) = mac(t6, self.0[3], rhs.0[3], carry);
+        t[3] = t3;
+        t[4] = t4;
+        t[5] = t5;
+        t[6] = t6;
+        t[7] = t7;
+
+        // 2단계: Montgomery reduction (REDC)
+        Fp(Self::mont_reduce_inner(&t))
+    }
+
+    /// REDC: 8-limb → 4-limb
+    /// 각 반복에서 하위 limb을 0으로 만들고, 결과를 오른쪽으로 밀어낸다
+    fn mont_reduce_inner(t: &[u64; 8]) -> [u64; 4] {
+        let mut r = *t;
+
+        for i in 0..4 {
+            // m을 잘 골라서 (r[i] + m * p)의 하위 64-bit가 0이 되게 한다
+            // m = r[i] * INV mod 2^64
+            let m = r[i].wrapping_mul(INV);
+
+            // r += m * p (하위 limb은 0이 되어 사라짐)
+            let (_, carry) = mac(r[i], m, MODULUS[0], 0);
+            let (res, carry) = mac(r[i + 1], m, MODULUS[1], carry);
+            r[i + 1] = res;
+            let (res, carry) = mac(r[i + 2], m, MODULUS[2], carry);
+            r[i + 2] = res;
+            let (res, carry) = mac(r[i + 3], m, MODULUS[3], carry);
+            r[i + 3] = res;
+
+            // carry를 상위 limb으로 전파
+            if i + 4 < 8 {
+                let (res, c2) = r[i + 4].overflowing_add(carry);
+                r[i + 4] = res;
+                if c2 && i + 5 < 8 {
+                    let (res, c3) = r[i + 5].overflowing_add(1);
+                    r[i + 5] = res;
+                    if c3 && i + 6 < 8 {
+                        r[i + 6] = r[i + 6].wrapping_add(1);
+                    }
+                }
+            }
+        }
+
+        // 4번 반복 후 하위 4 limb은 모두 0 → 상위 4 limb이 결과
+        sub_if_gte([r[4], r[5], r[6], r[7]]).0
     }
 }
 
@@ -192,6 +345,44 @@ mod tests {
         let (lo, hi) = mac(0, u64::MAX, u64::MAX, 0);
         assert_eq!(lo, 1);
         assert_eq!(hi, u64::MAX - 1);
+    }
+
+    // Step 2-4 테스트
+
+    #[test]
+    fn inv_constant_is_correct() {
+        // p0 * INV ≡ -1 (mod 2^64)
+        let check = MODULUS[0].wrapping_mul(INV);
+        assert_eq!(check.wrapping_add(1), 0);
+    }
+
+    #[test]
+    fn montgomery_roundtrip() {
+        // from_raw(42) → to_repr() == [42, 0, 0, 0]
+        let raw = [42u64, 0, 0, 0];
+        let fp = Fp::from_raw(raw);
+        assert_eq!(fp.to_repr(), raw);
+    }
+
+    #[test]
+    fn from_u64_zero_and_one() {
+        assert_eq!(Fp::from_u64(0), Fp::ZERO);
+        assert_eq!(Fp::from_u64(1), Fp::ONE);
+    }
+
+    #[test]
+    fn mont_mul_small() {
+        // 6 * 7 = 42
+        let a = Fp::from_u64(6);
+        let b = Fp::from_u64(7);
+        assert_eq!(a.mont_mul(&b), Fp::from_u64(42));
+    }
+
+    #[test]
+    fn mont_mul_identity() {
+        // a * 1 = a
+        let a = Fp::from_u64(123);
+        assert_eq!(a.mont_mul(&Fp::ONE), a);
     }
 
     // Step 2-3 테스트
