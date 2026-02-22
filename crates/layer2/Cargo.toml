@@ -1,0 +1,10 @@
+[package]
+name = "zk-layer2"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+zk-primitives = { path = "../primitives" }
+zk-chain = { path = "../chain" }
+rand.workspace = true
+rand_chacha.workspace = true

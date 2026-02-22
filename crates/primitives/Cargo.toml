@@ -1,0 +1,10 @@
+[package]
+name = "zk-primitives"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# 전부 from scratch — arkworks 의존성 없음
+# BN254 필드/커브/페어링, Poseidon, Merkle, R1CS, QAP, Groth16 직접 구현
+rand.workspace = true
+rand_chacha.workspace = true
