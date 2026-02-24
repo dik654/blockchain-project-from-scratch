@@ -1,6 +1,8 @@
 use std::fmt;
 use std::ops::{Add, Mul, Neg, Sub};
 
+use super::{adc, sbb, mac};
+
 // Step 2-1: 254-bit 소수를 u64 4개로 표현하기
 //
 // 왜 [u64; 4]인가?
@@ -265,36 +267,6 @@ impl fmt::Display for Fp {
         let r = self.to_repr();
         write!(f, "Fp(0x{:016x}{:016x}{:016x}{:016x})", r[3], r[2], r[1], r[0])
     }
-}
-
-// Step 2-2: 큰 수 산술의 빌딩 블록
-//
-// 문제: u64 + u64가 64-bit를 넘으면?
-// → carry(올림)를 다음 limb으로 전파해야 한다
-// 이 세 함수가 [u64; 4] 산술의 기초가 된다
-
-/// a + b + carry_in → (합, carry_out)
-#[inline(always)]
-fn adc(a: u64, b: u64, carry: bool) -> (u64, bool) {
-    let (s1, c1) = a.overflowing_add(b);
-    let (s2, c2) = s1.overflowing_add(carry as u64);
-    (s2, c1 | c2)
-}
-
-/// a - b - borrow_in → (차, borrow_out)
-#[inline(always)]
-fn sbb(a: u64, b: u64, borrow: bool) -> (u64, bool) {
-    let (s1, b1) = a.overflowing_sub(b);
-    let (s2, b2) = s1.overflowing_sub(borrow as u64);
-    (s2, b1 | b2)
-}
-
-/// acc + a * b + carry → (lo_64bit, hi_64bit)
-/// u128로 확장해서 오버플로 없이 계산
-#[inline(always)]
-fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
-    let wide = acc as u128 + (a as u128) * (b as u128) + carry as u128;
-    (wide as u64, (wide >> 64) as u64)
 }
 
 // Step 2-3: 모듈러 덧셈/뺄셈
