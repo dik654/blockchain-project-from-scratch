@@ -1,3 +1,6 @@
+use std::fmt;
+use std::ops::{Add, Mul, Neg, Sub};
+
 // Step 2-1: 254-bit 소수를 u64 4개로 표현하기
 //
 // 왜 [u64; 4]인가?
@@ -214,6 +217,53 @@ impl Fp {
             return None; // 0에는 역원이 없다
         }
         Some(self.pow(&[MODULUS[0] - 2, MODULUS[1], MODULUS[2], MODULUS[3]]))
+    }
+}
+
+// Step 2-6: 연산자 오버로딩
+//
+// Rust의 trait으로 +, -, *, - 연산자를 Fp에 붙인다
+// a.mont_mul(&b) 대신 a * b로 쓸 수 있게
+
+impl Add for Fp {
+    type Output = Fp;
+    fn add(self, rhs: Fp) -> Fp { Fp::add(&self, &rhs) }
+}
+
+impl Add<&Fp> for Fp {
+    type Output = Fp;
+    fn add(self, rhs: &Fp) -> Fp { Fp::add(&self, rhs) }
+}
+
+impl Sub for Fp {
+    type Output = Fp;
+    fn sub(self, rhs: Fp) -> Fp { Fp::sub(&self, &rhs) }
+}
+
+impl Sub<&Fp> for Fp {
+    type Output = Fp;
+    fn sub(self, rhs: &Fp) -> Fp { Fp::sub(&self, rhs) }
+}
+
+impl Mul for Fp {
+    type Output = Fp;
+    fn mul(self, rhs: Fp) -> Fp { self.mont_mul(&rhs) }
+}
+
+impl Mul<&Fp> for Fp {
+    type Output = Fp;
+    fn mul(self, rhs: &Fp) -> Fp { self.mont_mul(rhs) }
+}
+
+impl Neg for Fp {
+    type Output = Fp;
+    fn neg(self) -> Fp { Fp::neg(&self) }
+}
+
+impl fmt::Display for Fp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let r = self.to_repr();
+        write!(f, "Fp(0x{:016x}{:016x}{:016x}{:016x})", r[3], r[2], r[1], r[0])
     }
 }
 
@@ -512,5 +562,73 @@ mod tests {
     #[test]
     fn neg_zero_is_zero() {
         assert_eq!(Fp::ZERO.neg(), Fp::ZERO);
+    }
+
+    // Step 2-6 테스트: 연산자 + 체 공리
+
+    #[test]
+    fn operator_syntax() {
+        let a = Fp::from_u64(6);
+        let b = Fp::from_u64(7);
+        assert_eq!(a + b, Fp::from_u64(13));
+        assert_eq!(a * b, Fp::from_u64(42));
+        assert_eq!(b - a, Fp::from_u64(1));
+        assert_eq!(a + (-a), Fp::ZERO);
+    }
+
+    #[test]
+    fn additive_identity() {
+        // a + 0 = a
+        let a = Fp::from_u64(42);
+        assert_eq!(a + Fp::ZERO, a);
+        assert_eq!(Fp::ZERO + a, a);
+    }
+
+    #[test]
+    fn multiplicative_identity() {
+        // a * 1 = a
+        let a = Fp::from_u64(42);
+        assert_eq!(a * Fp::ONE, a);
+        assert_eq!(Fp::ONE * a, a);
+    }
+
+    #[test]
+    fn commutativity() {
+        let a = Fp::from_u64(13);
+        let b = Fp::from_u64(29);
+        assert_eq!(a + b, b + a);
+        assert_eq!(a * b, b * a);
+    }
+
+    #[test]
+    fn associativity() {
+        let a = Fp::from_u64(3);
+        let b = Fp::from_u64(7);
+        let c = Fp::from_u64(11);
+        assert_eq!((a + b) + c, a + (b + c));
+        assert_eq!((a * b) * c, a * (b * c));
+    }
+
+    #[test]
+    fn distributivity() {
+        // a * (b + c) = a*b + a*c
+        let a = Fp::from_u64(3);
+        let b = Fp::from_u64(7);
+        let c = Fp::from_u64(11);
+        assert_eq!(a * (b + c), a * b + a * c);
+    }
+
+    #[test]
+    fn inverse_larger_value() {
+        let a = Fp::from_raw([0xdeadbeef, 0xcafebabe, 0, 0]);
+        let a_inv = a.inv().unwrap();
+        assert_eq!(a * a_inv, Fp::ONE);
+    }
+
+    #[test]
+    fn display_format() {
+        let a = Fp::from_u64(42);
+        let s = format!("{}", a);
+        assert!(s.starts_with("Fp(0x"));
     }
 }
