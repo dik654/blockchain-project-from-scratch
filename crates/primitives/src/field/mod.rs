@@ -236,6 +236,8 @@ pub(crate) use define_prime_field;
 
 pub mod fp;
 pub mod fr;
+pub mod fp2;
 
 pub use fp::Fp;
 pub use fr::Fr;
+pub use fp2::Fp2;
