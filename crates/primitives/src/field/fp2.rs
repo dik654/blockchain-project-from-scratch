@@ -133,6 +133,20 @@ impl Fp2 {
     pub fn frobenius_map(&self) -> Fp2 {
         self.conjugate()
     }
+
+    /// x · β 여기서 β = 9 + u (Fp6 확장의 non-residue)
+    ///
+    /// Fp6 = Fp2[v] / (v³ - β) 에서 v³ = β이므로,
+    /// v³ 이상의 항을 줄일 때 이 함수가 필요하다
+    ///
+    /// (a + bu)(9 + u) = (9a - b) + (a + 9b)u
+    pub fn mul_by_nonresidue(&self) -> Fp2 {
+        let nine = Fp::from_u64(9);
+        Fp2 {
+            c0: nine * self.c0 - self.c1,
+            c1: self.c0 + nine * self.c1,
+        }
+    }
 }
 
 impl std::ops::Mul for Fp2 {
