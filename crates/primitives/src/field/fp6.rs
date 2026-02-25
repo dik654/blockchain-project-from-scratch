@@ -56,6 +56,21 @@ impl Fp6 {
             c2: -self.c2,
         }
     }
+
+    /// x · v — Fp12 확장의 non-residue 곱셈
+    ///
+    /// Fp12 = Fp6[w] / (w² - v) 에서 w² = v이므로,
+    /// Fp12 곱셈에서 w² 항을 줄일 때 이 함수가 필요하다
+    ///
+    /// v · (c₀ + c₁v + c₂v²) = c₂β + c₀v + c₁v²
+    /// (v³ = β이므로 c₂v³ = c₂β)
+    pub fn mul_by_nonresidue(&self) -> Fp6 {
+        Fp6 {
+            c0: self.c2.mul_by_nonresidue(), // c₂ · β
+            c1: self.c0,                      // c₀
+            c2: self.c1,                      // c₁
+        }
+    }
 }
 
 // Step 4-2: Fp6 곱셈 + inv
