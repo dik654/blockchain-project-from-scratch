@@ -88,6 +88,22 @@ impl Fp12 {
         }
     }
 
+    /// Fp12 거듭제곱: a^exp (square-and-multiply)
+    /// final exponentiation에서 사용
+    pub fn pow(&self, exp: &[u64]) -> Fp12 {
+        let mut result = Fp12::ONE;
+        let mut base = *self;
+        for &limb in exp.iter() {
+            for j in 0..64 {
+                if (limb >> j) & 1 == 1 {
+                    result = result * base;
+                }
+                base = base.square();
+            }
+        }
+        result
+    }
+
     /// Fp12의 역원: conj(a) / norm(a)
     ///
     /// norm = c₀² - v·c₁²  ∈ Fp6
