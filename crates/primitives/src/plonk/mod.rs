@@ -22,6 +22,7 @@
 pub mod arithmetization;
 pub mod permutation;
 pub mod lookup;
+pub mod prover;
 
 use crate::field::Fr;
 
@@ -35,6 +36,10 @@ pub use lookup::{
     LookupTable, PlookupError, PlookupProof,
     compute_sorted_list, compute_lookup_grand_product,
     verify_lookup_grand_product, compute_plookup,
+};
+pub use prover::{
+    PlonkProof, PlonkSetupParams, VerifyingKey,
+    plonk_setup, prove, verify,
 };
 
 // ── 코셋 상수 ─────────────────────────────────────────────
