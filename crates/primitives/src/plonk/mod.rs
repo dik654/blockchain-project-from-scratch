@@ -11,6 +11,7 @@
 // 이 모듈의 범위:
 //   1. arithmetization: 범용 게이트 + 제약 시스템
 //   2. permutation: copy constraint를 grand product로 증명
+//   3. lookup: Plookup — lookup argument (테이블 멤버십 증명)
 //
 //   PLONK prover/verifier는 Step 16에서 구현 (이 단계는 기반만)
 //
@@ -20,6 +21,7 @@
 
 pub mod arithmetization;
 pub mod permutation;
+pub mod lookup;
 
 use crate::field::Fr;
 
@@ -28,6 +30,11 @@ pub use arithmetization::{
 };
 pub use permutation::{
     compute_grand_product, compute_permutation_polynomials, verify_grand_product_closes,
+};
+pub use lookup::{
+    LookupTable, PlookupError, PlookupProof,
+    compute_sorted_list, compute_lookup_grand_product,
+    verify_lookup_grand_product, compute_plookup,
 };
 
 // ── 코셋 상수 ─────────────────────────────────────────────

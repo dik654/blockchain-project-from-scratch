@@ -144,6 +144,8 @@ pub struct SelectorPolynomials {
     pub q_o: Polynomial,
     pub q_m: Polynomial,
     pub q_c: Polynomial,
+    /// Lookup selector: q_lookup(ωⁱ) = 1 if gate i has lookup, 0 otherwise
+    pub q_lookup: Polynomial,
 }
 
 // ── PlonkConstraintSystem ─────────────────────────────────
@@ -154,8 +156,9 @@ pub struct SelectorPolynomials {
 ///   1. alloc_variable(value) — 변수 할당
 ///   2. add_gate(gate, a, b, c) — 게이트 추가
 ///   3. copy_constraint(p, q) — wire 동치 관계
-///   4. pad_to_power_of_two() — 패딩
-///   5. selector_polynomials() / wire_polynomials() — 다항식 추출
+///   4. register_table() / add_lookup() — lookup 제약 (선택)
+///   5. pad_to_power_of_two() — 패딩
+///   6. selector_polynomials() / wire_polynomials() — 다항식 추출
 pub struct PlonkConstraintSystem {
     /// 변수 풀: values[i] = i번째 변수의 값
     pub values: Vec<Fr>,
@@ -165,6 +168,10 @@ pub struct PlonkConstraintSystem {
     copy_constraints: Vec<(WirePosition, WirePosition)>,
     /// 공개 입력 수 (처음 num_public_inputs개 변수가 공개)
     pub num_public_inputs: usize,
+    /// Lookup 테이블: 각 테이블의 값 목록
+    pub(crate) lookup_tables: Vec<Vec<Fr>>,
+    /// Lookup 제약: (gate row, wire column, table id)
+    pub(crate) lookup_entries: Vec<(usize, Column, usize)>,
 }
 
 impl PlonkConstraintSystem {
@@ -175,6 +182,8 @@ impl PlonkConstraintSystem {
             gates: Vec::new(),
             copy_constraints: Vec::new(),
             num_public_inputs: 0,
+            lookup_tables: Vec::new(),
+            lookup_entries: Vec::new(),
         }
     }
 
@@ -285,6 +294,13 @@ impl PlonkConstraintSystem {
         let mut qo_points = Vec::with_capacity(n);
         let mut qm_points = Vec::with_capacity(n);
         let mut qc_points = Vec::with_capacity(n);
+        let mut qlookup_points = Vec::with_capacity(n);
+
+        // lookup이 있는 행 집합 구성
+        let mut lookup_rows = std::collections::HashSet::new();
+        for &(row, _, _) in &self.lookup_entries {
+            lookup_rows.insert(row);
+        }
 
         for i in 0..n {
             let w = domain.elements[i];
@@ -294,6 +310,8 @@ impl PlonkConstraintSystem {
             qo_points.push((w, g.q_o));
             qm_points.push((w, g.q_m));
             qc_points.push((w, g.q_c));
+            let qlookup_val = if lookup_rows.contains(&i) { Fr::ONE } else { Fr::ZERO };
+            qlookup_points.push((w, qlookup_val));
         }
 
         SelectorPolynomials {
@@ -302,7 +320,35 @@ impl PlonkConstraintSystem {
             q_o: Polynomial::lagrange_interpolate(&qo_points),
             q_m: Polynomial::lagrange_interpolate(&qm_points),
             q_c: Polynomial::lagrange_interpolate(&qc_points),
+            q_lookup: Polynomial::lagrange_interpolate(&qlookup_points),
         }
+    }
+
+    // ── Lookup 관련 메서드 ─────────────────────────────────
+
+    /// Lookup 테이블 등록, 테이블 ID 반환
+    pub fn register_table(&mut self, values: Vec<Fr>) -> usize {
+        let id = self.lookup_tables.len();
+        self.lookup_tables.push(values);
+        id
+    }
+
+    /// Lookup 제약 추가: gate `row`의 wire `column`의 값이
+    /// table_id의 테이블에 있어야 함
+    pub fn add_lookup(&mut self, row: usize, column: Column, table_id: usize) {
+        assert!(table_id < self.lookup_tables.len(), "invalid table id");
+        self.lookup_entries.push((row, column, table_id));
+    }
+
+    /// 모든 lookup 제약이 만족되는지 확인 (디버깅용)
+    pub fn are_lookups_satisfied(&self) -> bool {
+        for &(row, col, tid) in &self.lookup_entries {
+            let val = self.wire_value(WirePosition { column: col, row });
+            if !self.lookup_tables[tid].contains(&val) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Wire 다항식 추출
