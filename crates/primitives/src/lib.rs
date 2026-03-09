@@ -9,3 +9,4 @@ pub mod circuits;
 pub mod qap;
 pub mod groth16;
 pub mod kzg;
+pub mod plonk;
